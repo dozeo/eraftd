@@ -28,3 +28,5 @@ cDB := eraftd.StartCluster(4001, "localhost","localhost:4002", db, "/tmp/node.1"
                                                                    ^ data folder for raft
 ```
 Now you can read and write to your cluster over cDB, which implements the ClusterBackend interface
+
+All calls to cDB.Write() will be replicated over the whole cluster. Calls to cDB.Read() are handled by the local storage.
