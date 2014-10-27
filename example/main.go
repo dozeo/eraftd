@@ -3,13 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dozeo/eraftd"
+	log "github.com/kdar/factorlog"
 )
 
 var pverbose bool
@@ -19,6 +21,11 @@ var pjoin string
 var ppath string
 
 func init() {
+	pid := strconv.Itoa(os.Getpid())
+	frmt := []string{`%{Color "red" "ERROR"}%{Color "yellow" "WARN"}%{Color "green" "INFO"}%{Color "cyan" "DEBUG"}%{Color "blue" "TRACE"}[%{Date} %{Time}] `, pid, ` [%{SEVERITY}:%{File}:%{Line}] %{Message}%{Color "reset"}`}
+	frmt2 := strings.Join(frmt, "")
+	log.SetFormatter(log.NewStdFormatter(frmt2))
+	eraftd.Logger = log.New(os.Stdout, log.NewStdFormatter(frmt2))
 	flag.BoolVar(&pverbose, "v", false, "verbose logging")
 	flag.StringVar(&phost, "h", "localhost", "hostname")
 	flag.IntVar(&pport, "p", 4001, "port")
@@ -37,17 +44,16 @@ func init() {
 }
 
 func main() {
+	key := strconv.Itoa(pport)
 	db := dbNew()
 	cdb := eraftd.StartCluster(pport, phost, pjoin, db, ppath)
 	// cdb us this to read and write to the cluster
-	fmt.Println("Cluster node ready")
-	cdb.Read([]string{"hi"})
-	x, err := cdb.Write([]string{"a", "b"})
-	fmt.Println("WR", x, err)
-	x, err = cdb.Write([]string{"a", "b"})
-	fmt.Println("WR", x, err)
-	y, err := cdb.Read([]string{"a"})
-	fmt.Println("READ", "a => ", y, err)
+	log.Println("Cluster node ready")
+	x, err := cdb.Write([]string{key, "b"})
+	log.Warnln("main.WRITE ", x, " ", err)
+	time.Sleep(100 * time.Millisecond)
+	y, err := cdb.Read([]string{key})
+	log.Infoln("main.READ ", key, " => ", y, " ", err)
 	// ----------------------------------------
 	// capture ctrl+c
 	c := make(chan os.Signal, 1)

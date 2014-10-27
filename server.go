@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
@@ -36,7 +35,7 @@ type Server struct {
 func StartCluster(port int, host string, join string, cb ClusterBackend, path string) ClusterBackend {
 	raft.RegisterCommand(&WriteCommand{})
 	if err := os.MkdirAll(path, 0744); err != nil {
-		log.Fatalf("Unable to create path: %v", err)
+		Logger.Fatalf("Unable to create path: %v", err)
 	}
 
 	// Creates a new server.
@@ -83,7 +82,7 @@ func (s *Server) connectionStringMaster() string {
 	if leader == s.raftServer.Name() {
 		return ""
 	}
-	fmt.Println("WARNING: RETRY LEADER SEARCH ", leader)
+	Logger.Println("WARNING: RETRY LEADER SEARCH ", leader)
 	time.Sleep(1 * time.Second)
 	return s.connectionStringMaster()
 }
@@ -92,13 +91,13 @@ func (s *Server) connectionStringMaster() string {
 func (s *Server) ListenAndServe(leader string) error {
 	var err error
 
-	log.Printf("Initializing Raft Server: %s", s.path)
+	Logger.Printf("Initializing Raft Server: %s", s.path)
 
 	// Initialize and start Raft server.
 	transporter := raft.NewHTTPTransporter("/raft", 200*time.Millisecond)
 	s.raftServer, err = raft.NewServer(s.name, s.path, transporter, s.db, s.db, "")
 	if err != nil {
-		log.Fatal(err)
+		Logger.Fatal(err)
 	}
 	transporter.Install(s.raftServer, s)
 	s.raftServer.Start()
@@ -108,13 +107,13 @@ func (s *Server) ListenAndServe(leader string) error {
 	if leader != "" {
 		// Join to leader if specified.
 
-		log.Println("Attempting to join leader:", leader)
+		Logger.Println("Attempting to join leader:", leader)
 
 		if !s.raftServer.IsLogEmpty() {
-			log.Fatal("Cannot join with an existing log")
+			Logger.Fatal("Cannot join with an existing log")
 		} else {
 			if err := s.Join(leader); err != nil {
-				log.Println("Cannot join Leader: " + err.Error())
+				Logger.Println("Cannot join Leader: " + err.Error())
 			} else {
 				hasjoin = true
 			}
@@ -124,21 +123,21 @@ func (s *Server) ListenAndServe(leader string) error {
 	if !hasjoin && s.raftServer.IsLogEmpty() {
 		// Initialize the server by joining itself.
 
-		log.Println("Initializing new cluster")
+		Logger.Println("Initializing new cluster")
 
 		_, err := s.raftServer.Do(&raft.DefaultJoinCommand{
 			Name:             s.raftServer.Name(),
 			ConnectionString: s.connectionString(),
 		})
 		if err != nil {
-			log.Fatal(err)
+			Logger.Fatal(err)
 		}
 
 	} else {
-		log.Println("Recovered from log")
+		Logger.Println("Recovered from log")
 	}
 
-	log.Println("Initializing HTTP server")
+	Logger.Println("Initializing HTTP server")
 
 	// Initialize and start HTTP server.
 	s.httpServer = &http.Server{
@@ -152,7 +151,7 @@ func (s *Server) ListenAndServe(leader string) error {
 			lw := util.WrapWriter(w)
 			h.ServeHTTP(lw, r)
 			if !strings.Contains(r.URL.String(), "raft") {
-				log.Println("\033[32m", r.Method, r.URL.String(), lw.Status(), "\033[0m")
+				Logger.Println("\033[32m", r.Method, r.URL.String(), lw.Status(), "\033[0m")
 			}
 		})
 	})
@@ -192,25 +191,21 @@ func (s *Server) joinHandler(w http.ResponseWriter, req *http.Request) {
 	if s.raftServer.Leader() != s.raftServer.Name() {
 		// we are a read only node => redirect request to other node
 		master := s.raftServer.Peers()[s.raftServer.Leader()].ConnectionString
-		fmt.Println("MASTER:", master)
-		fmt.Println("redirect to master: ", master)
+		Logger.Println("MASTER:", master)
+		Logger.Println("redirect to master: ", master)
 		url, _ := url.Parse(master + "")
-		fmt.Println("redirect to url:", url)
+		Logger.Println("redirect to url:", url)
 		proxy := httputil.NewSingleHostReverseProxy(url)
 		proxy.ServeHTTP(w, req)
 		return
 	}
 	// needed to join a cluster
-	log.Println("-- joinHandler", "start")
-	defer log.Println("-- joinHandler", "end")
-
 	jcommand := &raft.DefaultJoinCommand{}
 
 	if err := json.NewDecoder(req.Body).Decode(&jcommand); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	fmt.Println("-- ", jcommand)
 	if _, err := s.raftServer.Do(jcommand); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -224,12 +219,11 @@ func (s *Server) readHandler(w http.ResponseWriter, req *http.Request) {
 }
 */
 func (s *Server) writeHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("writeHandler")
 	master := s.connectionStringMaster()
 	if master != "" {
 		// we are a read only node => redirect request to other node
 		// could happen while leader changes
-		fmt.Println("WRITE HANDLER REDIRECT TO MASTER SHOULD NOT HAPPEN: ", master)
+		Logger.Println("WRITE HANDLER REDIRECT TO MASTER SHOULD NOT HAPPEN: ", master)
 		url, _ := url.Parse(master)
 		proxy := httputil.NewSingleHostReverseProxy(url)
 		proxy.ServeHTTP(w, req)

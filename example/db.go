@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	log "github.com/kdar/factorlog"
 )
 
 // The key-value database.
@@ -27,7 +29,7 @@ func (db *DB) Read(key []string) ([]string, error) {
 	}
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
-	fmt.Println("GET", key[0], db.data[key[0]])
+	log.Println("GET ", key[0], " ", db.data[key[0]])
 	return []string{db.data[key[0]]}, nil
 }
 
@@ -36,7 +38,7 @@ func (db *DB) Write(key []string) ([]string, error) {
 		fmt.Println("write needs 2 keys:", key)
 		return nil, errors.New("Write needs 2 keys:")
 	}
-	fmt.Println("PUT", key[0], key[1])
+	log.Println("PUT ", key[0], " ", key[1])
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 	db.data[key[0]] = key[1]
