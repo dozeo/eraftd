@@ -44,10 +44,6 @@ func (db *DB) Write(key []string) ([]string, error) {
 }
 
 func (db *DB) Save() ([]byte, error) {
-	/*sa, err := db.Compact()
-	if err != nil {
-		return nil, err
-	}*/
 	b, err := json.Marshal(db.data)
 	if err != nil {
 		return nil, err
