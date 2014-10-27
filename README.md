@@ -20,10 +20,11 @@ There is an example implementation in the examples folder, which also contains a
 
 To start a new Cluster simply call
 ```
-cdb := eraftd.StartCluster(4001, "localhost","localhost:4002", db, "/tmp/node.1")
+cDB := eraftd.StartCluster(4001, "localhost","localhost:4002", db, "/tmp/node.1")
                            ^ local port
                                   ^ local hostname
                                               ^ existing node (if there is any)
                                                                ^ ClusterBackend_Implementation
                                                                    ^ data folder for raft
 ```
+Now you can read and write to your cluster over cDB, which implements the ClusterBackend interface
