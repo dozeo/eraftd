@@ -1,21 +1,16 @@
-package command
+package eraftd
 
-import (
-	"github.com/goraft/raft"
-	"github.com/goraft/raftd/db"
-)
+import "github.com/goraft/raft"
 
 // This command writes a value to a key.
 type WriteCommand struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Data []string `json:"data"`
 }
 
 // Creates a new write command.
-func NewWriteCommand(key string, value string) *WriteCommand {
+func NewWriteCommand(in []string) *WriteCommand {
 	return &WriteCommand{
-		Key:   key,
-		Value: value,
+		Data: in,
 	}
 }
 
@@ -26,7 +21,6 @@ func (c *WriteCommand) CommandName() string {
 
 // Writes a value to a key.
 func (c *WriteCommand) Apply(server raft.Server) (interface{}, error) {
-	db := server.Context().(*db.DB)
-	db.Put(c.Key, c.Value)
-	return nil, nil
+	db := server.Context().(ClusterBackend)
+	return db.Write(c.Data)
 }
