@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,7 @@ type Server struct {
 	mutex      sync.RWMutex
 }
 
-func StartCluster(port int, host string, join string, cb ClusterBackend, path string) ClusterBackend {
+func StartCluster(port int, host string, join string, cb ClusterBackend, path string) *Server {
 	raft.RegisterCommand(&WriteCommand{})
 	if err := os.MkdirAll(path, 0744); err != nil {
 		Logger.Fatalf("Unable to create path: %v", err)
@@ -110,11 +111,13 @@ func (s *Server) ListenAndServe(leader string) error {
 		Logger.Println("Attempting to join leader:", leader)
 
 		if !s.raftServer.IsLogEmpty() {
-			Logger.Fatal("Cannot join with an existing log")
+			Logger.Print("Cannot join with an existing")
+			Logger.Print("WARNING: Will try to join old clusterg")
 		} else {
 			if err := s.Join(leader); err != nil {
 				Logger.Println("Cannot join Leader: " + err.Error())
 			} else {
+				Logger.Println("Cluster joined leader: ", leader)
 				hasjoin = true
 			}
 		}
@@ -157,6 +160,7 @@ func (s *Server) ListenAndServe(leader string) error {
 	})
 	s.HandleFunc("/join", s.joinHandler)
 	s.HandleFunc("/write", s.writeHandler)
+	s.HandleFunc("/info", s.infoHandler)
 
 	go s.httpServer.ListenAndServe()
 
@@ -187,7 +191,28 @@ func (s *Server) Join(leader string) error {
 	return nil
 }
 
+func (s *Server) infoHandler(w http.ResponseWriter, req *http.Request) {
+	if s.raftServer.Leader() != s.raftServer.Name() {
+		w.Write([]byte("ERROR: This Server is not the leader"))
+		w.Write([]byte("\n"))
+		w.Write([]byte("The leader is "))
+		w.Write([]byte(s.connectionStringMaster()))
+		w.Write([]byte("\n"))
+		//return
+	} else {
+		w.Write([]byte("This Server is leader !"))
+		w.Write([]byte("\n"))
+	}
+	for _, p := range s.raftServer.Peers() {
+		w.Write([]byte(p.ConnectionString))
+		w.Write([]byte(" "))
+		w.Write([]byte(strconv.FormatInt(time.Now().Unix()-p.LastActivity().Unix(), 10)))
+		w.Write([]byte("\n"))
+	}
+}
+
 func (s *Server) joinHandler(w http.ResponseWriter, req *http.Request) {
+	Logger.Println("received join request")
 	if s.raftServer.Leader() != s.raftServer.Name() {
 		// we are a read only node => redirect request to other node
 		master := s.raftServer.Peers()[s.raftServer.Leader()].ConnectionString
