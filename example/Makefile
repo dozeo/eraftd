@@ -23,4 +23,4 @@ realstop:
 	killall raftd || true
 
 clean:
-	if [ -d /tmp/raftd/node.1 ] ; then rm -r /tmp/raftd ; fi
+	if [ -d /tmp/raftd ] ; then rm -r /tmp/raftd ; fi
