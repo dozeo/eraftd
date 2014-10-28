@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-type loginterface interface {
+type logInterface interface {
 	Fatal(v ...interface{})
 	Fatalf(format string, v ...interface{})
 	Fatalln(v ...interface{})
@@ -17,7 +17,7 @@ type loginterface interface {
 	Println(v ...interface{})
 }
 
-var Logger loginterface
+var Logger logInterface
 
 func init() {
 	Logger = golog.New(os.Stdout, "", 0)

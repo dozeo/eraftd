@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/goraft/raft"
@@ -21,31 +20,30 @@ import (
 	"github.com/zenazn/goji/web/util"
 )
 
-type Server struct {
+type Eraftd struct {
 	name       string
 	host       string
 	port       int
 	path       string
 	router     *web.Mux
-	raftServer raft.Server
+	raft       raft.Server
 	httpServer *http.Server
-	db         ClusterBackend
-	mutex      sync.RWMutex
+	backend    ClusterBackend
 }
 
-func StartCluster(port int, host string, join string, cb ClusterBackend, path string) *Server {
-	raft.RegisterCommand(&WriteCommand{})
+func StartCluster(port int, host string, join string, cb ClusterBackend, path string) *Eraftd {
+	raft.RegisterCommand(&DistributedWrite{})
 	if err := os.MkdirAll(path, 0744); err != nil {
 		Logger.Fatalf("Unable to create path: %v", err)
 	}
 
 	// Creates a new server.
-	s := &Server{
-		host:   host,
-		port:   port,
-		path:   path,
-		db:     cb,
-		router: web.New(),
+	s := &Eraftd{
+		host:    host,
+		port:    port,
+		path:    path,
+		backend: cb,
+		router:  web.New(),
 	}
 
 	// Read existing name or generate a new one.
@@ -62,55 +60,54 @@ func StartCluster(port int, host string, join string, cb ClusterBackend, path st
 }
 
 // Returns the connection string.
-func (s *Server) connectionString() string {
+func (s *Eraftd) connectionString() string {
 	return fmt.Sprintf("http://%s:%d", s.host, s.port)
 }
 
-func (s *Server) connectionStringMaster() string {
-	var leader string
-	for leader == "" {
-		leader = s.raftServer.Leader()
-		if leader == "" {
+func (s *Eraftd) connectionStringMaster() string {
+	var leaderID string
+	for leaderID == "" {
+		leaderID = s.raft.Leader()
+		if leaderID == "" {
 			time.Sleep(1 * time.Second)
 			continue
 		}
 		break
 	}
-	lp, ok := s.raftServer.Peers()[leader]
+	lp, ok := s.raft.Peers()[leaderID]
 	if ok {
 		return lp.ConnectionString
 	}
-	if leader == s.raftServer.Name() {
+	if leaderID == s.raft.Name() {
 		return ""
 	}
-	Logger.Println("WARNING: RETRY LEADER SEARCH ", leader)
+	Logger.Println("WARNING: RETRY LEADER SEARCH ", leaderID)
 	time.Sleep(1 * time.Second)
 	return s.connectionStringMaster()
 }
 
 // Starts the server.
-func (s *Server) ListenAndServe(leader string) error {
+func (s *Eraftd) ListenAndServe(leader string) error {
 	var err error
 
 	Logger.Printf("Initializing Raft Server: %s", s.path)
 
 	// Initialize and start Raft server.
-	transporter := raft.NewHTTPTransporter("/raft", 200*time.Millisecond)
-	s.raftServer, err = raft.NewServer(s.name, s.path, transporter, s.db, s.db, "")
+	httpTransport := raft.NewHTTPTransporter("/raft", 200*time.Millisecond)
+	s.raft, err = raft.NewServer(s.name, s.path, httpTransport, s.backend, s.backend, "")
 	if err != nil {
 		Logger.Fatal(err)
 	}
-	transporter.Install(s.raftServer, s)
-	s.raftServer.Start()
+	httpTransport.Install(s.raft, s)
+	s.raft.Start()
 
 	hasjoin := false
 
 	if leader != "" {
 		// Join to leader if specified.
-
 		Logger.Println("Attempting to join leader:", leader)
 
-		if !s.raftServer.IsLogEmpty() {
+		if !s.raft.IsLogEmpty() {
 			Logger.Print("Cannot join with an existing")
 			Logger.Print("WARNING: Will try to join old clusterg")
 		} else {
@@ -121,15 +118,14 @@ func (s *Server) ListenAndServe(leader string) error {
 				hasjoin = true
 			}
 		}
-
 	}
-	if !hasjoin && s.raftServer.IsLogEmpty() {
+	if !hasjoin && s.raft.IsLogEmpty() {
 		// Initialize the server by joining itself.
 
 		Logger.Println("Initializing new cluster")
 
-		_, err := s.raftServer.Do(&raft.DefaultJoinCommand{
-			Name:             s.raftServer.Name(),
+		_, err := s.raft.Do(&raft.DefaultJoinCommand{
+			Name:             s.raft.Name(),
 			ConnectionString: s.connectionString(),
 		})
 		if err != nil {
@@ -148,7 +144,7 @@ func (s *Server) ListenAndServe(leader string) error {
 		Handler: s.router,
 	}
 
-	//s.router.Use(middleware.Logger)
+	// Register a filtered Logger for the http server
 	s.router.Use(func(c *web.C, h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			lw := util.WrapWriter(w)
@@ -167,22 +163,21 @@ func (s *Server) ListenAndServe(leader string) error {
 	return nil
 }
 
-// This is a hack around Gorilla mux not providing the correct net/http
 // HandleFunc() interface.
-func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+func (s *Eraftd) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	s.router.Handle(pattern, handler)
 }
 
 // Joins to the leader of an existing cluster.
-func (s *Server) Join(leader string) error {
+func (s *Eraftd) Join(leader string) error {
 	command := &raft.DefaultJoinCommand{
-		Name:             s.raftServer.Name(),
+		Name:             s.raft.Name(),
 		ConnectionString: s.connectionString(),
 	}
 
-	var b bytes.Buffer
-	json.NewEncoder(&b).Encode(command)
-	resp, err := http.Post(fmt.Sprintf("http://%s/join", leader), "application/json", &b)
+	var buffer bytes.Buffer
+	json.NewEncoder(&buffer).Encode(command)
+	resp, err := http.Post(fmt.Sprintf("http://%s/join", leader), "application/json", &buffer)
 	if err != nil {
 		return err
 	}
@@ -191,19 +186,18 @@ func (s *Server) Join(leader string) error {
 	return nil
 }
 
-func (s *Server) infoHandler(w http.ResponseWriter, req *http.Request) {
-	if s.raftServer.Leader() != s.raftServer.Name() {
+func (s *Eraftd) infoHandler(w http.ResponseWriter, req *http.Request) {
+	if s.raft.Leader() != s.raft.Name() {
 		w.Write([]byte("ERROR: This Server is not the leader"))
 		w.Write([]byte("\n"))
 		w.Write([]byte("The leader is "))
 		w.Write([]byte(s.connectionStringMaster()))
 		w.Write([]byte("\n"))
-		//return
 	} else {
 		w.Write([]byte("This Server is leader !"))
 		w.Write([]byte("\n"))
 	}
-	for _, p := range s.raftServer.Peers() {
+	for _, p := range s.raft.Peers() {
 		w.Write([]byte(p.ConnectionString))
 		w.Write([]byte(" "))
 		w.Write([]byte(strconv.FormatInt(time.Now().Unix()-p.LastActivity().Unix(), 10)))
@@ -211,11 +205,11 @@ func (s *Server) infoHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (s *Server) joinHandler(w http.ResponseWriter, req *http.Request) {
+func (s *Eraftd) joinHandler(w http.ResponseWriter, req *http.Request) {
 	Logger.Println("received join request")
-	if s.raftServer.Leader() != s.raftServer.Name() {
+	if s.raft.Leader() != s.raft.Name() {
 		// we are a read only node => redirect request to other node
-		master := s.raftServer.Peers()[s.raftServer.Leader()].ConnectionString
+		master := s.raft.Peers()[s.raft.Leader()].ConnectionString
 		Logger.Println("MASTER:", master)
 		Logger.Println("redirect to master: ", master)
 		url, _ := url.Parse(master + "")
@@ -225,25 +219,19 @@ func (s *Server) joinHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// needed to join a cluster
-	jcommand := &raft.DefaultJoinCommand{}
+	djc := &raft.DefaultJoinCommand{}
 
-	if err := json.NewDecoder(req.Body).Decode(&jcommand); err != nil {
+	if err := json.NewDecoder(req.Body).Decode(&djc); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := s.raftServer.Do(jcommand); err != nil {
+	if _, err := s.raft.Do(djc); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
-/*
-func (s *Server) readHandler(w http.ResponseWriter, req *http.Request) {
-	value, _ := s.db.Read([]string{"k1"})
-	w.Write([]byte(value[0]))
-}
-*/
-func (s *Server) writeHandler(w http.ResponseWriter, req *http.Request) {
+func (s *Eraftd) writeHandler(w http.ResponseWriter, req *http.Request) {
 	master := s.connectionStringMaster()
 	if master != "" {
 		// we are a read only node => redirect request to other node
@@ -260,7 +248,7 @@ func (s *Server) writeHandler(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	wc := WriteCommand{}
+	wc := DistributedWrite{}
 	err = json.Unmarshal(b, &wc)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -268,7 +256,7 @@ func (s *Server) writeHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Execute the command against the Raft server.
-	ok, err := s.raftServer.Do(raft.Command(&wc))
+	ok, err := s.raft.Do(raft.Command(&wc))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}
@@ -279,11 +267,11 @@ func (s *Server) writeHandler(w http.ResponseWriter, req *http.Request) {
 	w.Write(bytes)
 }
 
-func (s *Server) Write(in []string) ([]string, error) {
-	wc := NewWriteCommand(in)
+func (s *Eraftd) Write(in []string) ([]string, error) {
+	wc := NewDistributedWrite(in)
 	master := s.connectionStringMaster()
 	if master == "" {
-		a, b := s.raftServer.Do(wc)
+		a, b := s.raft.Do(wc)
 		c := a.([]string)
 		return c, b
 	} else {
@@ -296,12 +284,12 @@ func (s *Server) Write(in []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		br, err := ioutil.ReadAll(req.Body)
+		rbody, err := ioutil.ReadAll(req.Body)
 		if err != nil {
 			return nil, err
 		}
 		sa := []string{}
-		err = json.Unmarshal(br, &sa)
+		err = json.Unmarshal(rbody, &sa)
 		if err != nil {
 			return nil, err
 		}
@@ -309,14 +297,14 @@ func (s *Server) Write(in []string) ([]string, error) {
 	}
 }
 
-func (s *Server) Read(in []string) ([]string, error) {
-	return s.db.Read(in)
+func (s *Eraftd) Read(in []string) ([]string, error) {
+	return s.backend.Read(in)
 }
 
-func (s *Server) Save() ([]byte, error) {
-	return s.db.Save()
+func (s *Eraftd) Save() ([]byte, error) {
+	return s.backend.Save()
 }
 
-func (s *Server) Recovery(in []byte) error {
-	return s.db.Recovery(in)
+func (s *Eraftd) Recovery(in []byte) error {
+	return s.backend.Recovery(in)
 }
