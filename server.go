@@ -20,6 +20,10 @@ import (
 	"github.com/zenazn/goji/web/util"
 )
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 type Eraftd struct {
 	name       string
 	host       string
@@ -34,7 +38,7 @@ type Eraftd struct {
 func StartCluster(port int, host string, join string, cb ClusterBackend, path string) *Eraftd {
 	raft.RegisterCommand(&DistributedWrite{})
 	if err := os.MkdirAll(path, 0744); err != nil {
-		Logger.Fatalf("Unable to create path: %v", err)
+		Logger.Fatalf("Unable to create path '%s': %v", path, err)
 	}
 
 	// Creates a new server.
