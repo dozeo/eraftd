@@ -68,7 +68,7 @@ func (s *Eraftd) connectionString() string {
 	return fmt.Sprintf("http://%s:%d", s.host, s.port)
 }
 
-func (s *Eraftd) connectionStringMaster() string {
+func (s *Eraftd) connectionStringLeader() string {
 	var leaderID string
 	for leaderID == "" {
 		leaderID = s.raft.Leader()
@@ -87,7 +87,7 @@ func (s *Eraftd) connectionStringMaster() string {
 	}
 	Logger.Println("WARNING: RETRY LEADER SEARCH ", leaderID)
 	time.Sleep(1 * time.Second)
-	return s.connectionStringMaster()
+	return s.connectionStringLeader()
 }
 
 // Starts the server.
@@ -161,10 +161,19 @@ func (s *Eraftd) ListenAndServe(leader string) error {
 	s.HandleFunc("/join", s.joinHandler)
 	s.HandleFunc("/write", s.writeHandler)
 	s.HandleFunc("/info", s.infoHandler)
+	s.HandleFunc("/connection", s.stringToHandler(s.connectionString))
+	s.HandleFunc("/connectionLeader", s.stringToHandler(s.connectionStringLeader))
 
 	go s.httpServer.ListenAndServe()
 
 	return nil
+}
+
+func (s *Eraftd) stringToHandler(f func() string) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(f()))
+		r.Body.Close()
+	}
 }
 
 // HandleFunc() interface.
@@ -195,7 +204,7 @@ func (s *Eraftd) infoHandler(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("ERROR: This Server is not the leader"))
 		w.Write([]byte("\n"))
 		w.Write([]byte("The leader is "))
-		w.Write([]byte(s.connectionStringMaster()))
+		w.Write([]byte(s.connectionStringLeader()))
 		w.Write([]byte("\n"))
 	} else {
 		w.Write([]byte("This Server is leader !"))
@@ -236,7 +245,7 @@ func (s *Eraftd) joinHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Eraftd) writeHandler(w http.ResponseWriter, req *http.Request) {
-	master := s.connectionStringMaster()
+	master := s.connectionStringLeader()
 	if master != "" {
 		// we are a read only node => redirect request to other node
 		// could happen while leader changes
@@ -273,7 +282,7 @@ func (s *Eraftd) writeHandler(w http.ResponseWriter, req *http.Request) {
 
 func (s *Eraftd) Write(in []string) ([]string, error) {
 	wc := NewDistributedWrite(in)
-	master := s.connectionStringMaster()
+	master := s.connectionStringLeader()
 	if master == "" {
 		a, b := s.raft.Do(wc)
 		c := a.([]string)
