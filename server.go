@@ -36,7 +36,9 @@ type Eraftd struct {
 }
 
 func StartCluster(port int, host string, join string, cb ClusterBackend, path string) *Eraftd {
+	Logger.Println("RAFT: StartCluster ", port, " ", host, " ", join, " ", path)
 	raft.RegisterCommand(&DistributedWrite{})
+	raft.RegisterCommand(&DistributedRemove{})
 	if err := os.MkdirAll(path, 0744); err != nil {
 		Logger.Fatalf("Unable to create path '%s': %v", path, err)
 	}
@@ -94,7 +96,7 @@ func (s *Eraftd) connectionStringLeader() string {
 func (s *Eraftd) ListenAndServe(leader string) error {
 	var err error
 
-	Logger.Printf("Initializing Raft Server: %s", s.path)
+	Logger.Printf("RAFT: Initializing Raft Server: %s", s.path)
 
 	// Initialize and start Raft server.
 	httpTransport := raft.NewHTTPTransporter("/raft", 200*time.Millisecond)
@@ -109,16 +111,16 @@ func (s *Eraftd) ListenAndServe(leader string) error {
 
 	if leader != "" {
 		// Join to leader if specified.
-		Logger.Println("Attempting to join leader:", leader)
+		Logger.Println("RAFT: Attempting to join leader:", leader)
 
 		if !s.raft.IsLogEmpty() {
-			Logger.Print("Cannot join with an existing")
-			Logger.Print("WARNING: Will try to join old clusterg")
+			Logger.Print("RAFT: Cannot join with an existing log")
+			Logger.Print("RAFT: WARNING: Will try to join old clusterg")
 		} else {
 			if err := s.Join(leader); err != nil {
-				Logger.Println("Cannot join Leader: " + err.Error())
+				Logger.Println("RAFT: Cannot join Leader: " + err.Error())
 			} else {
-				Logger.Println("Cluster joined leader: ", leader)
+				Logger.Println("RAFT: Cluster joined leader: ", leader)
 				hasjoin = true
 			}
 		}
@@ -126,7 +128,7 @@ func (s *Eraftd) ListenAndServe(leader string) error {
 	if !hasjoin && s.raft.IsLogEmpty() {
 		// Initialize the server by joining itself.
 
-		Logger.Println("Initializing new cluster")
+		Logger.Println("RAFT: Initializing new cluster")
 
 		_, err := s.raft.Do(&raft.DefaultJoinCommand{
 			Name:             s.raft.Name(),
@@ -137,10 +139,10 @@ func (s *Eraftd) ListenAndServe(leader string) error {
 		}
 
 	} else {
-		Logger.Println("Recovered from log")
+		Logger.Println("RAFT: Recovered from log")
 	}
 
-	Logger.Println("Initializing HTTP server")
+	Logger.Println("RAFT: Initializing HTTP server ", s.port)
 
 	// Initialize and start HTTP server.
 	s.httpServer = &http.Server{
@@ -154,18 +156,23 @@ func (s *Eraftd) ListenAndServe(leader string) error {
 			lw := util.WrapWriter(w)
 			h.ServeHTTP(lw, r)
 			if !strings.Contains(r.URL.String(), "raft") {
-				Logger.Println("\033[32m", r.Method, r.URL.String(), lw.Status(), "\033[0m")
+				Logger.Println("\033[32m", r.Method, " ", r.URL.String(), " ", lw.Status(), "\033[0m")
 			}
 		})
 	})
 	s.HandleFunc("/join", s.joinHandler)
 	s.HandleFunc("/write", s.writeHandler)
 	s.HandleFunc("/info", s.infoHandler)
+	s.HandleFunc("/clear", s.clearHandler)
 	s.HandleFunc("/connection", s.stringToHandler(s.connectionString))
 	s.HandleFunc("/connectionLeader", s.stringToHandler(s.connectionStringLeader))
 
-	go s.httpServer.ListenAndServe()
-
+	go func() {
+		err := s.httpServer.ListenAndServe()
+		if err != nil {
+			fmt.Println("RAFT: HTTP ", err.Error())
+		}
+	}()
 	return nil
 }
 
@@ -197,6 +204,22 @@ func (s *Eraftd) Join(leader string) error {
 	resp.Body.Close()
 
 	return nil
+}
+
+func (s *Eraftd) clearHandler(w http.ResponseWriter, req *http.Request) {
+	if s.raft.Leader() == s.raft.Name() {
+		for _, p := range s.raft.Peers() {
+			diff := time.Now().Unix() - p.LastActivity().Unix()
+			if diff > 10 {
+				w.Write([]byte("removing "))
+				w.Write([]byte(p.Name))
+				s.raft.Do(NewDistributedRemove(p.Name))
+				w.Write([]byte(" done"))
+			}
+		}
+	} else {
+		w.Write([]byte("no leader"))
+	}
 }
 
 func (s *Eraftd) infoHandler(w http.ResponseWriter, req *http.Request) {
