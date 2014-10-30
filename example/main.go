@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"code.google.com/p/go-uuid/uuid"
 	"github.com/dozeo/eraftd"
 	log "github.com/kdar/factorlog"
 )
@@ -49,11 +50,20 @@ func main() {
 	cdb := eraftd.StartCluster(pport, phost, pjoin, db, ppath)
 	// cdb us this to read and write to the cluster
 	log.Println("Cluster node ready")
-	x, err := cdb.Write([]string{key, "b"})
-	log.Warnln("main.WRITE ", x, " ", err)
-	time.Sleep(100 * time.Millisecond)
-	y, err := cdb.Read([]string{key})
-	log.Infoln("main.READ ", key, " => ", y, " ", err)
+	go func() {
+		for {
+			time.Sleep(2000 * time.Millisecond)
+			v := uuid.New()
+			x, err := cdb.Write([]string{key, v})
+			log.Warnln("main.WRITE ", x, " ", err)
+			time.Sleep(100 * time.Millisecond)
+			y, err := cdb.Read([]string{key})
+			log.Infoln("main.READ ", key, " => ", y, " ", err)
+			if y[0] != v {
+				log.Critical("VALUE NOT CORRECT")
+			}
+		}
+	}()
 	// ----------------------------------------
 	// capture ctrl+c
 	c := make(chan os.Signal, 1)
