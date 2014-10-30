@@ -208,14 +208,25 @@ func (s *Eraftd) Join(leader string) error {
 
 func (s *Eraftd) clearHandler(w http.ResponseWriter, req *http.Request) {
 	if s.raft.Leader() == s.raft.Name() {
+		remove := []string{}
 		for _, p := range s.raft.Peers() {
 			diff := time.Now().Unix() - p.LastActivity().Unix()
 			if diff > 10 {
-				w.Write([]byte("removing "))
-				w.Write([]byte(p.Name))
-				s.raft.Do(NewDistributedRemove(p.Name))
-				w.Write([]byte(" done"))
+				remove = append(remove, p.Name)
 			}
+		}
+		for _, r := range remove {
+			w.Write([]byte("removing local "))
+			w.Write([]byte(r))
+			s.raft.RemovePeer(r)
+			w.Write([]byte(" done\n"))
+		}
+		for _, r := range remove {
+			w.Write([]byte("removing distributed "))
+			w.Write([]byte(r))
+			s.raft.RemovePeer(r)
+			s.raft.Do(NewDistributedRemove(r))
+			w.Write([]byte(" done\n"))
 		}
 	} else {
 		w.Write([]byte("no leader"))
