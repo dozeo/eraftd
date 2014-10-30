@@ -223,22 +223,31 @@ func (s *Eraftd) clearHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Eraftd) infoHandler(w http.ResponseWriter, req *http.Request) {
-	if s.raft.Leader() != s.raft.Name() {
-		w.Write([]byte("ERROR: This Server is not the leader"))
-		w.Write([]byte("\n"))
-		w.Write([]byte("The leader is "))
-		w.Write([]byte(s.connectionStringLeader()))
-		w.Write([]byte("\n"))
-	} else {
-		w.Write([]byte("This Server is leader !"))
-		w.Write([]byte("\n"))
-	}
+	out := ""
+	out += s.raft.GetState() + "\n"
+	/*
+		if s.raft.Leader() != s.raft.Name() {
+			w.Write([]byte("ERROR: This Server is not the leader"))
+			w.Write([]byte("\n"))
+			w.Write([]byte("The leader is "))
+			w.Write([]byte(s.connectionStringLeader()))
+			w.Write([]byte("\n"))
+		} else {
+			w.Write([]byte("This Server is leader !"))
+			w.Write([]byte("\n"))
+		}
+	*/
+	out += "Peer self " + s.connectionString() + "\n"
 	for _, p := range s.raft.Peers() {
-		w.Write([]byte(p.ConnectionString))
-		w.Write([]byte(" "))
-		w.Write([]byte(strconv.FormatInt(time.Now().Unix()-p.LastActivity().Unix(), 10)))
-		w.Write([]byte("\n"))
+		out += "Peer "
+		out += p.Name
+		out += " "
+		out += p.ConnectionString
+		out += " LastActivity "
+		out += strconv.FormatInt(time.Now().Unix()-p.LastActivity().Unix(), 10)
+		out += "\n"
 	}
+	w.Write([]byte(out))
 }
 
 func (s *Eraftd) joinHandler(w http.ResponseWriter, req *http.Request) {
