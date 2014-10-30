@@ -167,12 +167,21 @@ func (s *Eraftd) ListenAndServe(leader string) error {
 	s.HandleFunc("/connection", s.stringToHandler(s.connectionString))
 	s.HandleFunc("/connectionLeader", s.stringToHandler(s.connectionStringLeader))
 
+	var serr = make(chan error, 1)
 	go func() {
 		err := s.httpServer.ListenAndServe()
 		if err != nil {
+			serr <- err
 			fmt.Println("RAFT: HTTP ", err.Error())
 		}
 	}()
+	// fetch bind errors
+	select {
+	case res := <-serr:
+		return res
+	case <-time.After(time.Second * 1):
+		return nil
+	}
 	return nil
 }
 
